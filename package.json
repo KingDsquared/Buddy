@@ -1,6 +1,6 @@
 {
-  "name": "raidforge-v10",
-  "version": "10.0.0",
+  "name": "raidforge-v20",
+  "version": "20.0.0",
   "private": true,
   "type": "commonjs",
   "scripts": {
