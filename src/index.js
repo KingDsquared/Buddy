@@ -19,7 +19,7 @@ const GUILD_ID = process.env.DISCORD_GUILD_ID;
 const DATABASE_URL = process.env.DATABASE_URL;
 
 if (!TOKEN || !CLIENT_ID || !GUILD_ID || !DATABASE_URL) {
-  console.error("Missing variables: DISCORD_TOKEN, DISCORD_CLIENT_ID, DISCORD_GUILD_ID, DATABASE_URL");
+  console.error("Missing variables.");
   process.exit(1);
 }
 
@@ -49,17 +49,14 @@ async function isOfficer(interaction) {
 }
 
 async function requireOfficer(interaction) {
-  const allowed = await isOfficer(interaction);
+  if (await isOfficer(interaction)) return true;
 
-  if (!allowed) {
-    await interaction.reply({
-      content: "You need officer permission for this command.",
-      ephemeral: true
-    });
-    return false;
-  }
+  await interaction.reply({
+    content: "You need officer permission for this command.",
+    ephemeral: true
+  });
 
-  return true;
+  return false;
 }
 
 async function refreshRaidMessage(raid) {
@@ -139,9 +136,7 @@ client.on(Events.InteractionCreate, async interaction => {
       if (name === "raid-edit") {
         if (!(await requireOfficer(interaction))) return;
 
-        const id = interaction.options.getString("id", true);
-
-        const raid = await db.updateRaid(id, {
+        const raid = await db.updateRaid(interaction.options.getString("id", true), {
           title: interaction.options.getString("title"),
           time: interaction.options.getString("time"),
           note: interaction.options.getString("note") ?? undefined
@@ -157,10 +152,10 @@ client.on(Events.InteractionCreate, async interaction => {
       if (name === "raid-note") {
         if (!(await requireOfficer(interaction))) return;
 
-        const id = interaction.options.getString("id", true);
-        const note = interaction.options.getString("note", true);
+        const raid = await db.updateRaid(interaction.options.getString("id", true), {
+          note: interaction.options.getString("note", true)
+        });
 
-        const raid = await db.updateRaid(id, { note });
         if (!raid) return interaction.reply({ content: "Raid not found.", ephemeral: true });
 
         await refreshRaidMessage(raid);
@@ -171,10 +166,9 @@ client.on(Events.InteractionCreate, async interaction => {
       if (name === "raid-close" || name === "raid-open") {
         if (!(await requireOfficer(interaction))) return;
 
-        const id = interaction.options.getString("id", true);
         const status = name === "raid-close" ? "CLOSED" : "OPEN";
+        const raid = await db.setRaidStatus(interaction.options.getString("id", true), status);
 
-        const raid = await db.setRaidStatus(id, status);
         if (!raid) return interaction.reply({ content: "Raid not found.", ephemeral: true });
 
         await refreshRaidMessage(raid);
@@ -204,148 +198,17 @@ client.on(Events.InteractionCreate, async interaction => {
       if (name === "raid-ping") {
         if (!(await requireOfficer(interaction))) return;
 
-        const id = interaction.options.getString("id", true);
-        const message = interaction.options.getString("message") || "Raid reminder.";
-
-        const raid = await db.getRaid(id);
+        const raid = await db.getRaid(interaction.options.getString("id", true));
         if (!raid) return interaction.reply({ content: "Raid not found.", ephemeral: true });
 
         const signed = raid.signups.filter(s => s.status !== "Absent");
+        if (!signed.length) return interaction.reply({ content: "Nobody is signed up to ping.", ephemeral: true });
 
-        if (!signed.length) {
-          return interaction.reply({ content: "Nobody is signed up to ping.", ephemeral: true });
-        }
+        const message = interaction.options.getString("message") || "Raid reminder.";
 
         await interaction.reply({
           content: `**${raid.title}**\n${message}\n\n${signed.map(s => `<@${s.userId}>`).join(" ")}`,
           allowedMentions: { users: signed.map(s => s.userId) }
-        });
-        return;
-      }
-
-      if (name === "raid-reminder-add") {
-        if (!(await requireOfficer(interaction))) return;
-
-        const id = interaction.options.getString("id", true);
-        const minutes = interaction.options.getInteger("minutes", true);
-
-        const raid = await db.getRaid(id);
-        if (!raid) return interaction.reply({ content: "Raid not found.", ephemeral: true });
-
-        await db.addReminder(id, minutes);
-        await interaction.reply({ content: `Reminder added: ${minutes} minutes before.`, ephemeral: true });
-        return;
-      }
-
-      if (name === "raid-reminder-list") {
-        const id = interaction.options.getString("id", true);
-        const reminders = await db.listReminders(id);
-
-        await interaction.reply({
-          content: ui.buildReminderListText(reminders),
-          ephemeral: true
-        });
-        return;
-      }
-
-      if (name === "raid-reminder-clear") {
-        if (!(await requireOfficer(interaction))) return;
-
-        const id = interaction.options.getString("id", true);
-        await db.clearReminders(id);
-
-        await interaction.reply({ content: "Reminders cleared.", ephemeral: true });
-        return;
-      }
-
-      if (name === "raid-template-create") {
-        if (!(await requireOfficer(interaction))) return;
-
-        const templateId = await db.createTemplate({
-          guildId: interaction.guildId,
-          name: interaction.options.getString("name", true),
-          title: interaction.options.getString("title", true),
-          note: interaction.options.getString("note") || "",
-          createdBy: interaction.user.id
-        });
-
-        await interaction.reply({ content: `Template created. ID: \`${templateId}\``, ephemeral: true });
-        return;
-      }
-
-      if (name === "raid-template-list") {
-        const templates = await db.listTemplates(interaction.guildId);
-        await interaction.reply({
-          content: ui.buildTemplateListText(templates),
-          ephemeral: true
-        });
-        return;
-      }
-
-      if (name === "raid-template-use") {
-        if (!(await requireOfficer(interaction))) return;
-
-        const templateName = interaction.options.getString("name", true);
-        const template = await db.getTemplate(interaction.guildId, templateName);
-
-        if (!template) {
-          return interaction.reply({ content: "Template not found.", ephemeral: true });
-        }
-
-        const raid = {
-          id: Date.now().toString(),
-          guildId: interaction.guildId,
-          channelId: interaction.channelId,
-          title: template.title,
-          time: interaction.options.getString("time", true),
-          note: template.note || "",
-          createdBy: interaction.user.id,
-          status: "OPEN",
-          signups: []
-        };
-
-        await createRaidPost(interaction, raid);
-        return;
-      }
-
-      if (name === "raid-recurring-create") {
-        if (!(await requireOfficer(interaction))) return;
-
-        const id = await db.createRecurringRaid({
-          guildId: interaction.guildId,
-          channelId: interaction.channelId,
-          templateName: interaction.options.getString("template", true),
-          dayOfWeek: interaction.options.getString("day", true).toLowerCase(),
-          timeOfDay: interaction.options.getString("time", true),
-          createdBy: interaction.user.id
-        });
-
-        await interaction.reply({
-          content: `Recurring raid created. ID: \`${id}\``,
-          ephemeral: true
-        });
-        return;
-      }
-
-      if (name === "raid-recurring-list") {
-        const rows = await db.listRecurringRaids(interaction.guildId);
-
-        await interaction.reply({
-          content: ui.buildRecurringListText(rows),
-          ephemeral: true
-        });
-        return;
-      }
-
-      if (name === "raid-recurring-delete") {
-        if (!(await requireOfficer(interaction))) return;
-
-        const id = interaction.options.getString("id", true);
-        await db.deleteRecurringRaid(id);
-
-        await interaction.reply({
-          content: "Recurring raid deleted.",
-          ephemeral: true
         });
         return;
       }
@@ -356,8 +219,6 @@ client.on(Events.InteractionCreate, async interaction => {
         const raidId = interaction.options.getString("raid_id", true);
         const user = interaction.options.getUser("user", true);
         const status = interaction.options.getString("status", true);
-        const role = interaction.options.getString("role") || null;
-        const spec = interaction.options.getString("spec") || null;
 
         const raid = await db.getRaid(raidId);
         if (!raid) return interaction.reply({ content: "Raid not found.", ephemeral: true });
@@ -367,16 +228,14 @@ client.on(Events.InteractionCreate, async interaction => {
           userId: user.id,
           username: user.username,
           status,
-          role,
-          spec,
+          className: null,
+          role: interaction.options.getString("role") || null,
+          spec: interaction.options.getString("spec") || null,
           note: null
         });
 
         await refreshRaidMessage(updatedRaid);
-        await interaction.reply({
-          content: `Moved ${user} to **${status}**.`,
-          ephemeral: true
-        });
+        await interaction.reply({ content: `Moved ${user} to **${status}**.`, ephemeral: true });
         return;
       }
 
@@ -397,77 +256,14 @@ client.on(Events.InteractionCreate, async interaction => {
           userId: user.id,
           username: existing?.username || user.username,
           status: existing?.status || "Maybe",
+          className: existing?.className || null,
           role: existing?.role || null,
           spec: existing?.spec || null,
           note
         });
 
         await refreshRaidMessage(updatedRaid);
-        await interaction.reply({
-          content: `Added note for ${user}.`,
-          ephemeral: true
-        });
-        return;
-      }
-
-      if (name === "attendance-mark") {
-        if (!(await requireOfficer(interaction))) return;
-
-        const raidId = interaction.options.getString("raid_id", true);
-        const user = interaction.options.getUser("user", true);
-        const attended = interaction.options.getBoolean("attended", true);
-
-        const raid = await db.getRaid(raidId);
-        if (!raid) return interaction.reply({ content: "Raid not found.", ephemeral: true });
-
-        await db.markAttendance({
-          raidId,
-          userId: user.id,
-          username: user.username,
-          attended,
-          markedBy: interaction.user.id
-        });
-
-        await interaction.reply({
-          content: `Attendance marked for ${user}: ${attended ? "attended" : "missed"}.`,
-          ephemeral: true
-        });
-        return;
-      }
-
-      if (name === "attendance-view") {
-        const raidId = interaction.options.getString("raid_id", true);
-        const rows = await db.getAttendance(raidId);
-
-        await interaction.reply({
-          content: ui.buildAttendanceText(rows),
-          ephemeral: true
-        });
-        return;
-      }
-
-      if (name === "character-link") {
-        const id = await db.linkCharacter({
-          guildId: interaction.guildId,
-          userId: interaction.user.id,
-          name: interaction.options.getString("name", true),
-          realm: interaction.options.getString("realm", true),
-          region: interaction.options.getString("region", true),
-          className: interaction.options.getString("class") || null,
-          isMain: interaction.options.getBoolean("main") || false
-        });
-
-        await interaction.reply({ content: `Character linked. ID: \`${id}\``, ephemeral: true });
-        return;
-      }
-
-      if (name === "character-list") {
-        const chars = await db.listCharacters(interaction.guildId, interaction.user.id);
-
-        await interaction.reply({
-          content: ui.buildCharacterListText(chars),
-          ephemeral: true
-        });
+        await interaction.reply({ content: `Added note for ${user}.`, ephemeral: true });
         return;
       }
 
@@ -488,25 +284,6 @@ client.on(Events.InteractionCreate, async interaction => {
         });
         return;
       }
-
-      if (name === "raid-export") {
-        if (!(await requireOfficer(interaction))) return;
-
-        const id = interaction.options.getString("id", true);
-        const exportData = await db.getRaidExportData(id);
-        const text = ui.buildRaidExportText(exportData);
-
-        const file = new AttachmentBuilder(Buffer.from(text, "utf8"), {
-          name: `raid-export-${id}.txt`
-        });
-
-        await interaction.reply({
-          content: "Raid export:",
-          files: [file],
-          ephemeral: true
-        });
-        return;
-      }
     }
 
     if (interaction.isButton()) {
@@ -520,16 +297,17 @@ client.on(Events.InteractionCreate, async interaction => {
         return interaction.reply({ content: "This raid is closed.", ephemeral: true });
       }
 
-      if (action === "join" || action === "change") {
+      if (action === "change") {
         await interaction.reply({
-          content: action === "join" ? "Choose your role:" : "Change your role/spec:",
-          components: ui.roleMenu(raidId),
+          content: "Select your class:",
+          components: ui.classMenu(raidId),
           ephemeral: true
         });
         return;
       }
 
       const statusMap = {
+        bench: "Bench",
         late: "Late",
         maybe: "Maybe",
         absent: "Absent"
@@ -545,6 +323,7 @@ client.on(Events.InteractionCreate, async interaction => {
           userId: interaction.user.id,
           username: interaction.member?.displayName || interaction.user.username,
           status: statusMap[action],
+          className: null,
           role: null,
           spec: null,
           note: null
@@ -555,31 +334,24 @@ client.on(Events.InteractionCreate, async interaction => {
         embeds: [ui.buildRaidEmbed(updatedRaid)],
         components: ui.raidButtons(updatedRaid.id, updatedRaid.status === "CLOSED")
       });
-
       return;
     }
 
     if (interaction.isStringSelectMenu()) {
-      if (interaction.customId.startsWith("role:")) {
+      if (interaction.customId.startsWith("class:")) {
         const [, raidId] = interaction.customId.split(":");
-        const raid = await db.getRaid(raidId);
-
-        if (!raid || raid.status === "CLOSED") {
-          return interaction.update({ content: "This raid is closed or missing.", components: [] });
-        }
-
-        const role = interaction.values[0];
+        const className = interaction.values[0];
 
         await interaction.update({
-          content: `Role selected: **${role}**. Now choose spec:`,
-          components: ui.specMenu(raidId, role)
+          content: `Class selected: **${className}**. Now choose spec:`,
+          components: ui.specMenu(raidId, className)
         });
         return;
       }
 
       if (interaction.customId.startsWith("spec:")) {
-        const [, raidId, role] = interaction.customId.split(":");
-        const spec = interaction.values[0];
+        const [, raidId, className] = interaction.customId.split(":");
+        const [spec, role] = interaction.values[0].split("|");
 
         const raid = await db.getRaid(raidId);
         if (!raid || raid.status === "CLOSED") {
@@ -593,6 +365,7 @@ client.on(Events.InteractionCreate, async interaction => {
           userId: interaction.user.id,
           username: interaction.member?.displayName || interaction.user.username,
           status: existing?.status && existing.status !== "Absent" ? existing.status : "Going",
+          className,
           role,
           spec,
           note: existing?.note || null
@@ -601,7 +374,7 @@ client.on(Events.InteractionCreate, async interaction => {
         await refreshRaidMessage(updatedRaid);
 
         await interaction.update({
-          content: `Signed up as **${spec}**.`,
+          content: `Signed up as **${spec} ${className}**.`,
           components: []
         });
         return;
@@ -611,10 +384,7 @@ client.on(Events.InteractionCreate, async interaction => {
     console.error("Interaction error:", err);
 
     if (interaction.isRepliable() && !interaction.replied && !interaction.deferred) {
-      await interaction.reply({
-        content: "Something went wrong.",
-        ephemeral: true
-      });
+      await interaction.reply({ content: "Something went wrong.", ephemeral: true });
     }
   }
 });
