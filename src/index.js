@@ -122,7 +122,6 @@ client.on(Events.InteractionCreate, async interaction => {
       if (name === "raid-roster") {
         const raid = await db.getRaid(interaction.options.getString("id", true));
         if (!raid) return interaction.reply({ content: "Raid not found.", ephemeral: true });
-
         await interaction.reply({ embeds: [ui.buildRaidEmbed(raid)], ephemeral: true });
         return;
       }
@@ -467,7 +466,7 @@ client.on(Events.InteractionCreate, async interaction => {
 
       if (action === "join" || action === "change") {
         await interaction.reply({
-          content: action === "join" ? "Select your class:" : "Change your class/spec:",
+          content: action === "join" ? "Select your Horde TBC class:" : "Change your Horde TBC class/spec:",
           components: ui.classMenu(raidId),
           ephemeral: true
         });
