@@ -16,7 +16,6 @@ const {
   initDb,
   createRaid,
   setRaidMessageId,
-  getRaid,
   upsertSignup,
   removeSignup
 } = require("./db");
@@ -24,8 +23,15 @@ const {
 const TOKEN = process.env.DISCORD_TOKEN;
 const CLIENT_ID = process.env.DISCORD_CLIENT_ID;
 const GUILD_ID = process.env.DISCORD_GUILD_ID;
+const DATABASE_URL = process.env.DATABASE_URL;
 
-if (!TOKEN || !CLIENT_ID || !GUILD_ID || !process.env.DATABASE_URL) {
+console.log("Env check:");
+console.log("DISCORD_TOKEN:", !!TOKEN);
+console.log("DISCORD_CLIENT_ID:", !!CLIENT_ID);
+console.log("DISCORD_GUILD_ID:", !!GUILD_ID);
+console.log("DATABASE_URL:", !!DATABASE_URL);
+
+if (!TOKEN || !CLIENT_ID || !GUILD_ID || !DATABASE_URL) {
   console.error("Missing Railway variables.");
   console.error("Need DISCORD_TOKEN, DISCORD_CLIENT_ID, DISCORD_GUILD_ID, DATABASE_URL");
   process.exit(1);
@@ -138,11 +144,11 @@ client.on(Events.InteractionCreate, async interaction => {
         title: interaction.options.getString("title", true),
         time: interaction.options.getString("time", true),
         note: interaction.options.getString("note") || "",
-        createdBy: interaction.user.id
+        createdBy: interaction.user.id,
+        signups: []
       };
 
       await createRaid(raid);
-      raid.signups = [];
 
       const msg = await interaction.reply({
         embeds: [embed(raid)],
@@ -187,6 +193,11 @@ client.on(Events.InteractionCreate, async interaction => {
         });
       }
 
+      if (!raid) {
+        await interaction.reply({ content: "Raid not found.", ephemeral: true });
+        return;
+      }
+
       await interaction.update({
         embeds: [embed(raid)],
         components: buttons(raid.id)
@@ -220,6 +231,11 @@ client.on(Events.InteractionCreate, async interaction => {
           role,
           spec
         });
+
+        if (!raid) {
+          await interaction.reply({ content: "Raid not found.", ephemeral: true });
+          return;
+        }
 
         const channel = await client.channels.fetch(raid.channelId);
         const message = await channel.messages.fetch(raid.messageId);
