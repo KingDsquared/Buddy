@@ -26,10 +26,17 @@ const GUILD_ID = process.env.DISCORD_GUILD_ID;
 const DATABASE_URL = process.env.DATABASE_URL;
 
 console.log("Env check:");
+console.log("NODE_ENV:", process.env.NODE_ENV);
 console.log("DISCORD_TOKEN:", !!TOKEN);
 console.log("DISCORD_CLIENT_ID:", !!CLIENT_ID);
 console.log("DISCORD_GUILD_ID:", !!GUILD_ID);
 console.log("DATABASE_URL:", !!DATABASE_URL);
+console.log(
+  "Discord/db keys present:",
+  Object.keys(process.env).filter(k =>
+    ["DISCORD", "DATABASE", "PG", "NODE_ENV"].some(prefix => k.startsWith(prefix))
+  )
+);
 
 if (!TOKEN || !CLIENT_ID || !GUILD_ID || !DATABASE_URL) {
   console.error("Missing Railway variables.");
@@ -51,19 +58,50 @@ const commands = [
   new SlashCommandBuilder()
     .setName("raid-create")
     .setDescription("Create a raid signup")
-    .addStringOption(o => o.setName("title").setDescription("Raid title").setRequired(true))
-    .addStringOption(o => o.setName("time").setDescription("Raid time, example: Friday 20:00").setRequired(true))
-    .addStringOption(o => o.setName("note").setDescription("Optional note").setRequired(false))
+    .addStringOption(o =>
+      o.setName("title")
+        .setDescription("Raid title")
+        .setRequired(true)
+    )
+    .addStringOption(o =>
+      o.setName("time")
+        .setDescription("Raid time, example: Friday 20:00")
+        .setRequired(true)
+    )
+    .addStringOption(o =>
+      o.setName("note")
+        .setDescription("Optional note")
+        .setRequired(false)
+    )
 ].map(c => c.toJSON());
 
 function buttons(raidId) {
   return [
     new ActionRowBuilder().addComponents(
-      new ButtonBuilder().setCustomId(`raid:join:${raidId}`).setLabel("Join").setStyle(ButtonStyle.Success),
-      new ButtonBuilder().setCustomId(`raid:late:${raidId}`).setLabel("Late").setStyle(ButtonStyle.Primary),
-      new ButtonBuilder().setCustomId(`raid:maybe:${raidId}`).setLabel("Maybe").setStyle(ButtonStyle.Secondary),
-      new ButtonBuilder().setCustomId(`raid:absent:${raidId}`).setLabel("Absent").setStyle(ButtonStyle.Danger),
-      new ButtonBuilder().setCustomId(`raid:withdraw:${raidId}`).setLabel("Withdraw").setStyle(ButtonStyle.Secondary)
+      new ButtonBuilder()
+        .setCustomId(`raid:join:${raidId}`)
+        .setLabel("Join")
+        .setStyle(ButtonStyle.Success),
+
+      new ButtonBuilder()
+        .setCustomId(`raid:late:${raidId}`)
+        .setLabel("Late")
+        .setStyle(ButtonStyle.Primary),
+
+      new ButtonBuilder()
+        .setCustomId(`raid:maybe:${raidId}`)
+        .setLabel("Maybe")
+        .setStyle(ButtonStyle.Secondary),
+
+      new ButtonBuilder()
+        .setCustomId(`raid:absent:${raidId}`)
+        .setLabel("Absent")
+        .setStyle(ButtonStyle.Danger),
+
+      new ButtonBuilder()
+        .setCustomId(`raid:withdraw:${raidId}`)
+        .setLabel("Withdraw")
+        .setStyle(ButtonStyle.Secondary)
     )
   ];
 }
@@ -91,7 +129,9 @@ function specMenu(raidId, role) {
 }
 
 function embed(raid) {
-  const byStatus = status => raid.signups.filter(s => s.status === status);
+  const signups = raid.signups || [];
+
+  const byStatus = status => signups.filter(s => s.status === status);
 
   const going = byStatus("Going");
   const late = byStatus("Late");
@@ -101,7 +141,10 @@ function embed(raid) {
   const goingText = roles.map(role => {
     const people = going.filter(s => s.role === role);
     if (!people.length) return null;
-    return `**${role} (${people.length})**\n${people.map(p => `• ${p.username}${p.spec ? ` — ${p.spec}` : ""}`).join("\n")}`;
+
+    return `**${role} (${people.length})**\n${people
+      .map(p => `• ${p.username}${p.spec ? ` — ${p.spec}` : ""}`)
+      .join("\n")}`;
   }).filter(Boolean).join("\n\n") || "Nobody";
 
   const list = arr => arr.length
@@ -110,7 +153,11 @@ function embed(raid) {
 
   return new EmbedBuilder()
     .setTitle(`Raid: ${raid.title}`)
-    .setDescription(`**Time:** ${raid.time}\n**Note:** ${raid.note || "None"}\n\nNo signup limits.`)
+    .setDescription(
+      `**Time:** ${raid.time}\n` +
+      `**Note:** ${raid.note || "None"}\n\n` +
+      `No signup limits.`
+    )
     .addFields(
       { name: `Going (${going.length})`, value: goingText },
       { name: `Late (${late.length})`, value: list(late) },
@@ -122,15 +169,25 @@ function embed(raid) {
 
 async function registerCommands() {
   const rest = new REST({ version: "10" }).setToken(TOKEN);
-  await rest.put(Routes.applicationGuildCommands(CLIENT_ID, GUILD_ID), { body: commands });
+
+  await rest.put(
+    Routes.applicationGuildCommands(CLIENT_ID, GUILD_ID),
+    { body: commands }
+  );
+
   console.log("Slash commands registered.");
 }
 
-const client = new Client({ intents: [GatewayIntentBits.Guilds] });
+const client = new Client({
+  intents: [GatewayIntentBits.Guilds]
+});
 
 client.once(Events.ClientReady, async c => {
   console.log(`Logged in as ${c.user.tag}`);
+
   await initDb();
+  console.log("Database ready.");
+
   await registerCommands();
 });
 
@@ -161,7 +218,9 @@ client.on(Events.InteractionCreate, async interaction => {
     }
 
     if (interaction.isButton()) {
-      const [, action, raidId] = interaction.customId.split(":");
+      const [type, action, raidId] = interaction.customId.split(":");
+
+      if (type !== "raid") return;
 
       if (action === "join") {
         await interaction.reply({
@@ -194,7 +253,10 @@ client.on(Events.InteractionCreate, async interaction => {
       }
 
       if (!raid) {
-        await interaction.reply({ content: "Raid not found.", ephemeral: true });
+        await interaction.reply({
+          content: "Raid not found.",
+          ephemeral: true
+        });
         return;
       }
 
@@ -233,7 +295,10 @@ client.on(Events.InteractionCreate, async interaction => {
         });
 
         if (!raid) {
-          await interaction.reply({ content: "Raid not found.", ephemeral: true });
+          await interaction.reply({
+            content: "Raid not found.",
+            ephemeral: true
+          });
           return;
         }
 
@@ -254,6 +319,7 @@ client.on(Events.InteractionCreate, async interaction => {
       }
     }
   } catch (err) {
+    console.error("Interaction error:");
     console.error(err);
 
     if (interaction.isRepliable() && !interaction.replied && !interaction.deferred) {
