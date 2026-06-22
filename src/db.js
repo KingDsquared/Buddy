@@ -22,11 +22,6 @@ async function initDb() {
   `);
 
   await pool.query(`
-    ALTER TABLE raids
-    ADD COLUMN IF NOT EXISTS status TEXT DEFAULT 'OPEN';
-  `);
-
-  await pool.query(`
     CREATE TABLE IF NOT EXISTS signups (
       raid_id TEXT NOT NULL REFERENCES raids(id) ON DELETE CASCADE,
       user_id TEXT NOT NULL,
@@ -36,6 +31,44 @@ async function initDb() {
       spec TEXT,
       updated_at TIMESTAMP DEFAULT NOW(),
       PRIMARY KEY (raid_id, user_id)
+    );
+  `);
+
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS raid_templates (
+      id TEXT PRIMARY KEY,
+      guild_id TEXT NOT NULL,
+      name TEXT NOT NULL,
+      title TEXT NOT NULL,
+      note TEXT,
+      created_by TEXT NOT NULL,
+      created_at TIMESTAMP DEFAULT NOW()
+    );
+  `);
+
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS attendance (
+      raid_id TEXT NOT NULL REFERENCES raids(id) ON DELETE CASCADE,
+      user_id TEXT NOT NULL,
+      username TEXT NOT NULL,
+      attended BOOLEAN NOT NULL,
+      marked_by TEXT NOT NULL,
+      marked_at TIMESTAMP DEFAULT NOW(),
+      PRIMARY KEY (raid_id, user_id)
+    );
+  `);
+
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS characters (
+      id TEXT PRIMARY KEY,
+      guild_id TEXT NOT NULL,
+      user_id TEXT NOT NULL,
+      region TEXT NOT NULL,
+      realm TEXT NOT NULL,
+      name TEXT NOT NULL,
+      class_name TEXT,
+      is_main BOOLEAN DEFAULT false,
+      created_at TIMESTAMP DEFAULT NOW()
     );
   `);
 }
@@ -51,46 +84,6 @@ async function createRaid(raid) {
 
 async function setRaidMessageId(raidId, messageId) {
   await pool.query(`UPDATE raids SET message_id=$1 WHERE id=$2`, [messageId, raidId]);
-}
-
-async function updateRaid(raidId, fields) {
-  const current = await getRaid(raidId);
-  if (!current) return null;
-
-  await pool.query(
-    `UPDATE raids
-     SET title=$1, raid_time=$2, note=$3
-     WHERE id=$4`,
-    [
-      fields.title || current.title,
-      fields.time || current.time,
-      fields.note !== undefined ? fields.note : current.note,
-      raidId
-    ]
-  );
-
-  return getRaid(raidId);
-}
-
-async function deleteRaid(raidId) {
-  await pool.query(`DELETE FROM raids WHERE id=$1`, [raidId]);
-}
-
-async function setRaidStatus(raidId, status) {
-  await pool.query(`UPDATE raids SET status=$1 WHERE id=$2`, [status, raidId]);
-  return getRaid(raidId);
-}
-
-async function listRaids(guildId) {
-  const res = await pool.query(
-    `SELECT id, title, raid_time, status, created_at
-     FROM raids
-     WHERE guild_id=$1
-     ORDER BY created_at DESC
-     LIMIT 10`,
-    [guildId]
-  );
-  return res.rows;
 }
 
 async function getRaid(raidId) {
@@ -124,6 +117,44 @@ async function getRaid(raidId) {
   };
 }
 
+async function listRaids(guildId) {
+  const res = await pool.query(
+    `SELECT id, title, raid_time, status, created_at
+     FROM raids
+     WHERE guild_id=$1
+     ORDER BY created_at DESC
+     LIMIT 15`,
+    [guildId]
+  );
+  return res.rows;
+}
+
+async function updateRaid(raidId, fields) {
+  const current = await getRaid(raidId);
+  if (!current) return null;
+
+  await pool.query(
+    `UPDATE raids SET title=$1, raid_time=$2, note=$3 WHERE id=$4`,
+    [
+      fields.title || current.title,
+      fields.time || current.time,
+      fields.note !== undefined ? fields.note : current.note,
+      raidId
+    ]
+  );
+
+  return getRaid(raidId);
+}
+
+async function deleteRaid(raidId) {
+  await pool.query(`DELETE FROM raids WHERE id=$1`, [raidId]);
+}
+
+async function setRaidStatus(raidId, status) {
+  await pool.query(`UPDATE raids SET status=$1 WHERE id=$2`, [status, raidId]);
+  return getRaid(raidId);
+}
+
 async function upsertSignup({ raidId, userId, username, status, role, spec }) {
   await pool.query(
     `
@@ -148,15 +179,94 @@ async function removeSignup(raidId, userId) {
   return getRaid(raidId);
 }
 
+async function createTemplate(t) {
+  const id = Date.now().toString();
+
+  await pool.query(
+    `INSERT INTO raid_templates (id, guild_id, name, title, note, created_by)
+     VALUES ($1,$2,$3,$4,$5,$6)`,
+    [id, t.guildId, t.name, t.title, t.note, t.createdBy]
+  );
+
+  return id;
+}
+
+async function getTemplate(guildId, name) {
+  const res = await pool.query(
+    `SELECT * FROM raid_templates WHERE guild_id=$1 AND LOWER(name)=LOWER($2) LIMIT 1`,
+    [guildId, name]
+  );
+
+  return res.rows[0] || null;
+}
+
+async function listTemplates(guildId) {
+  const res = await pool.query(
+    `SELECT * FROM raid_templates WHERE guild_id=$1 ORDER BY created_at DESC LIMIT 20`,
+    [guildId]
+  );
+
+  return res.rows;
+}
+
+async function markAttendance({ raidId, userId, username, attended, markedBy }) {
+  await pool.query(
+    `
+    INSERT INTO attendance (raid_id, user_id, username, attended, marked_by, marked_at)
+    VALUES ($1,$2,$3,$4,$5,NOW())
+    ON CONFLICT (raid_id, user_id)
+    DO UPDATE SET username=$3, attended=$4, marked_by=$5, marked_at=NOW()
+    `,
+    [raidId, userId, username, attended, markedBy]
+  );
+}
+
+async function getAttendance(raidId) {
+  const res = await pool.query(
+    `SELECT * FROM attendance WHERE raid_id=$1 ORDER BY username ASC`,
+    [raidId]
+  );
+
+  return res.rows;
+}
+
+async function linkCharacter(c) {
+  const id = Date.now().toString();
+
+  await pool.query(
+    `INSERT INTO characters (id, guild_id, user_id, region, realm, name, class_name, is_main)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8)`,
+    [id, c.guildId, c.userId, c.region, c.realm, c.name, c.className, c.isMain]
+  );
+
+  return id;
+}
+
+async function listCharacters(guildId, userId) {
+  const res = await pool.query(
+    `SELECT * FROM characters WHERE guild_id=$1 AND user_id=$2 ORDER BY is_main DESC, created_at DESC`,
+    [guildId, userId]
+  );
+
+  return res.rows;
+}
+
 module.exports = {
   initDb,
   createRaid,
   setRaidMessageId,
+  getRaid,
+  listRaids,
   updateRaid,
   deleteRaid,
   setRaidStatus,
-  listRaids,
-  getRaid,
   upsertSignup,
-  removeSignup
+  removeSignup,
+  createTemplate,
+  getTemplate,
+  listTemplates,
+  markAttendance,
+  getAttendance,
+  linkCharacter,
+  listCharacters
 };
