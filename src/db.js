@@ -179,11 +179,16 @@ async function getRaid(raidId) {
 
 async function listRaids(guildId) {
   const res = await pool.query(
-    `SELECT id, title, raid_time, status, created_at
-     FROM raids WHERE guild_id=$1
-     ORDER BY created_at DESC LIMIT 20`,
+    `
+    SELECT id, title, raid_time, status, created_at
+    FROM raids
+    WHERE guild_id=$1
+    ORDER BY created_at DESC
+    LIMIT 20
+    `,
     [guildId]
   );
+
   return res.rows;
 }
 
@@ -192,7 +197,11 @@ async function updateRaid(raidId, fields) {
   if (!current) return null;
 
   await pool.query(
-    `UPDATE raids SET title=$1, raid_time=$2, note=$3 WHERE id=$4`,
+    `
+    UPDATE raids
+    SET title=$1, raid_time=$2, note=$3
+    WHERE id=$4
+    `,
     [
       fields.title || current.title,
       fields.time || current.time,
@@ -229,7 +238,16 @@ async function upsertSignup({ raidId, userId, username, status, className, role,
       note=COALESCE($8, signups.note),
       updated_at=NOW()
     `,
-    [raidId, userId, username, status, className || null, role || null, spec || null, note || null]
+    [
+      raidId,
+      userId,
+      username,
+      status,
+      className || null,
+      role || null,
+      spec || null,
+      note || null
+    ]
   );
 
   return getRaid(raidId);
@@ -242,10 +260,13 @@ async function removeSignup(raidId, userId) {
 
 async function addReminder(raidId, minutesBefore) {
   const id = Date.now().toString();
+
   await pool.query(
-    `INSERT INTO reminders (id, raid_id, minutes_before, sent) VALUES ($1,$2,$3,false)`,
+    `INSERT INTO reminders (id, raid_id, minutes_before, sent)
+     VALUES ($1,$2,$3,false)`,
     [id, raidId, minutesBefore]
   );
+
   return id;
 }
 
@@ -254,6 +275,7 @@ async function listReminders(raidId) {
     `SELECT * FROM reminders WHERE raid_id=$1 ORDER BY minutes_before DESC`,
     [raidId]
   );
+
   return res.rows;
 }
 
@@ -268,6 +290,7 @@ async function getPendingReminders() {
     JOIN raids ON reminders.raid_id = raids.id
     WHERE reminders.sent=false AND raids.status='OPEN'
   `);
+
   return res.rows;
 }
 
@@ -277,11 +300,20 @@ async function markReminderSent(reminderId) {
 
 async function createTemplate(template) {
   const id = Date.now().toString();
+
   await pool.query(
     `INSERT INTO raid_templates (id, guild_id, name, title, note, created_by)
      VALUES ($1,$2,$3,$4,$5,$6)`,
-    [id, template.guildId, template.name, template.title, template.note, template.createdBy]
+    [
+      id,
+      template.guildId,
+      template.name,
+      template.title,
+      template.note,
+      template.createdBy
+    ]
   );
+
   return id;
 }
 
@@ -290,6 +322,7 @@ async function getTemplate(guildId, name) {
     `SELECT * FROM raid_templates WHERE guild_id=$1 AND LOWER(name)=LOWER($2) LIMIT 1`,
     [guildId, name]
   );
+
   return res.rows[0] || null;
 }
 
@@ -298,17 +331,28 @@ async function listTemplates(guildId) {
     `SELECT * FROM raid_templates WHERE guild_id=$1 ORDER BY created_at DESC LIMIT 20`,
     [guildId]
   );
+
   return res.rows;
 }
 
 async function createRecurringRaid(row) {
   const id = Date.now().toString();
+
   await pool.query(
     `INSERT INTO recurring_raids
      (id, guild_id, channel_id, template_name, day_of_week, time_of_day, created_by, active)
      VALUES ($1,$2,$3,$4,$5,$6,$7,true)`,
-    [id, row.guildId, row.channelId, row.templateName, row.dayOfWeek, row.timeOfDay, row.createdBy]
+    [
+      id,
+      row.guildId,
+      row.channelId,
+      row.templateName,
+      row.dayOfWeek,
+      row.timeOfDay,
+      row.createdBy
+    ]
   );
+
   return id;
 }
 
@@ -317,6 +361,7 @@ async function listRecurringRaids(guildId) {
     `SELECT * FROM recurring_raids WHERE guild_id=$1 AND active=true ORDER BY created_at DESC`,
     [guildId]
   );
+
   return res.rows;
 }
 
@@ -350,16 +395,29 @@ async function getAttendance(raidId) {
     `SELECT * FROM attendance WHERE raid_id=$1 ORDER BY username ASC`,
     [raidId]
   );
+
   return res.rows;
 }
 
 async function linkCharacter(character) {
   const id = Date.now().toString();
+
   await pool.query(
-    `INSERT INTO characters (id, guild_id, user_id, region, realm, name, class_name, is_main)
+    `INSERT INTO characters
+     (id, guild_id, user_id, region, realm, name, class_name, is_main)
      VALUES ($1,$2,$3,$4,$5,$6,$7,$8)`,
-    [id, character.guildId, character.userId, character.region, character.realm, character.name, character.className, character.isMain]
+    [
+      id,
+      character.guildId,
+      character.userId,
+      character.region,
+      character.realm,
+      character.name,
+      character.className,
+      character.isMain
+    ]
   );
+
   return id;
 }
 
@@ -368,6 +426,7 @@ async function listCharacters(guildId, userId) {
     `SELECT * FROM characters WHERE guild_id=$1 AND user_id=$2 ORDER BY is_main DESC, created_at DESC`,
     [guildId, userId]
   );
+
   return res.rows;
 }
 
