@@ -115,10 +115,7 @@ client.on(Events.InteractionCreate, async interaction => {
 
       if (name === "raid-list") {
         const raids = await db.listRaids(interaction.guildId);
-        await interaction.reply({
-          content: ui.buildRaidListText(raids),
-          ephemeral: true
-        });
+        await interaction.reply({ content: ui.buildRaidListText(raids), ephemeral: true });
         return;
       }
 
@@ -126,10 +123,7 @@ client.on(Events.InteractionCreate, async interaction => {
         const raid = await db.getRaid(interaction.options.getString("id", true));
         if (!raid) return interaction.reply({ content: "Raid not found.", ephemeral: true });
 
-        await interaction.reply({
-          embeds: [ui.buildRaidEmbed(raid)],
-          ephemeral: true
-        });
+        await interaction.reply({ embeds: [ui.buildRaidEmbed(raid)], ephemeral: true });
         return;
       }
 
@@ -181,7 +175,6 @@ client.on(Events.InteractionCreate, async interaction => {
 
         const id = interaction.options.getString("id", true);
         const raid = await db.getRaid(id);
-
         if (!raid) return interaction.reply({ content: "Raid not found.", ephemeral: true });
 
         try {
@@ -202,7 +195,9 @@ client.on(Events.InteractionCreate, async interaction => {
         if (!raid) return interaction.reply({ content: "Raid not found.", ephemeral: true });
 
         const signed = raid.signups.filter(s => s.status !== "Absent");
-        if (!signed.length) return interaction.reply({ content: "Nobody is signed up to ping.", ephemeral: true });
+        if (!signed.length) {
+          return interaction.reply({ content: "Nobody is signed up to ping.", ephemeral: true });
+        }
 
         const message = interaction.options.getString("message") || "Raid reminder.";
 
@@ -210,6 +205,109 @@ client.on(Events.InteractionCreate, async interaction => {
           content: `**${raid.title}**\n${message}\n\n${signed.map(s => `<@${s.userId}>`).join(" ")}`,
           allowedMentions: { users: signed.map(s => s.userId) }
         });
+        return;
+      }
+
+      if (name === "raid-reminder-add") {
+        if (!(await requireOfficer(interaction))) return;
+
+        const id = interaction.options.getString("id", true);
+        const minutes = interaction.options.getInteger("minutes", true);
+
+        const raid = await db.getRaid(id);
+        if (!raid) return interaction.reply({ content: "Raid not found.", ephemeral: true });
+
+        await db.addReminder(id, minutes);
+        await interaction.reply({ content: `Reminder added: ${minutes} minutes before.`, ephemeral: true });
+        return;
+      }
+
+      if (name === "raid-reminder-list") {
+        const reminders = await db.listReminders(interaction.options.getString("id", true));
+        await interaction.reply({ content: ui.buildReminderListText(reminders), ephemeral: true });
+        return;
+      }
+
+      if (name === "raid-reminder-clear") {
+        if (!(await requireOfficer(interaction))) return;
+
+        await db.clearReminders(interaction.options.getString("id", true));
+        await interaction.reply({ content: "Reminders cleared.", ephemeral: true });
+        return;
+      }
+
+      if (name === "raid-template-create") {
+        if (!(await requireOfficer(interaction))) return;
+
+        const templateId = await db.createTemplate({
+          guildId: interaction.guildId,
+          name: interaction.options.getString("name", true),
+          title: interaction.options.getString("title", true),
+          note: interaction.options.getString("note") || "",
+          createdBy: interaction.user.id
+        });
+
+        await interaction.reply({ content: `Template created. ID: \`${templateId}\``, ephemeral: true });
+        return;
+      }
+
+      if (name === "raid-template-list") {
+        const templates = await db.listTemplates(interaction.guildId);
+        await interaction.reply({ content: ui.buildTemplateListText(templates), ephemeral: true });
+        return;
+      }
+
+      if (name === "raid-template-use") {
+        if (!(await requireOfficer(interaction))) return;
+
+        const templateName = interaction.options.getString("name", true);
+        const template = await db.getTemplate(interaction.guildId, templateName);
+
+        if (!template) return interaction.reply({ content: "Template not found.", ephemeral: true });
+
+        const raid = {
+          id: Date.now().toString(),
+          guildId: interaction.guildId,
+          channelId: interaction.channelId,
+          title: template.title,
+          time: interaction.options.getString("time", true),
+          note: template.note || "",
+          createdBy: interaction.user.id,
+          status: "OPEN",
+          signups: []
+        };
+
+        await createRaidPost(interaction, raid);
+        return;
+      }
+
+      if (name === "raid-recurring-create") {
+        if (!(await requireOfficer(interaction))) return;
+
+        const id = await db.createRecurringRaid({
+          guildId: interaction.guildId,
+          channelId: interaction.channelId,
+          templateName: interaction.options.getString("template", true),
+          dayOfWeek: interaction.options.getString("day", true).toLowerCase(),
+          timeOfDay: interaction.options.getString("time", true),
+          createdBy: interaction.user.id
+        });
+
+        await interaction.reply({ content: `Recurring raid created. ID: \`${id}\``, ephemeral: true });
+        return;
+      }
+
+      if (name === "raid-recurring-list") {
+        const rows = await db.listRecurringRaids(interaction.guildId);
+        await interaction.reply({ content: ui.buildRecurringListText(rows), ephemeral: true });
+        return;
+      }
+
+      if (name === "raid-recurring-delete") {
+        if (!(await requireOfficer(interaction))) return;
+
+        await db.deleteRecurringRaid(interaction.options.getString("id", true));
+        await interaction.reply({ content: "Recurring raid deleted.", ephemeral: true });
         return;
       }
 
@@ -223,15 +321,17 @@ client.on(Events.InteractionCreate, async interaction => {
         const raid = await db.getRaid(raidId);
         if (!raid) return interaction.reply({ content: "Raid not found.", ephemeral: true });
 
+        const existing = raid.signups.find(s => s.userId === user.id);
+
         const updatedRaid = await db.upsertSignup({
           raidId,
           userId: user.id,
-          username: user.username,
+          username: existing?.username || user.username,
           status,
-          className: null,
-          role: interaction.options.getString("role") || null,
-          spec: interaction.options.getString("spec") || null,
-          note: null
+          className: existing?.className || null,
+          role: interaction.options.getString("role") || existing?.role || null,
+          spec: interaction.options.getString("spec") || existing?.spec || null,
+          note: existing?.note || null
         });
 
         await refreshRaidMessage(updatedRaid);
@@ -267,6 +367,58 @@ client.on(Events.InteractionCreate, async interaction => {
         return;
       }
 
+      if (name === "attendance-mark") {
+        if (!(await requireOfficer(interaction))) return;
+
+        const raidId = interaction.options.getString("raid_id", true);
+        const user = interaction.options.getUser("user", true);
+        const attended = interaction.options.getBoolean("attended", true);
+
+        const raid = await db.getRaid(raidId);
+        if (!raid) return interaction.reply({ content: "Raid not found.", ephemeral: true });
+
+        await db.markAttendance({
+          raidId,
+          userId: user.id,
+          username: user.username,
+          attended,
+          markedBy: interaction.user.id
+        });
+
+        await interaction.reply({
+          content: `Attendance marked for ${user}: ${attended ? "attended" : "missed"}.`,
+          ephemeral: true
+        });
+        return;
+      }
+
+      if (name === "attendance-view") {
+        const rows = await db.getAttendance(interaction.options.getString("raid_id", true));
+        await interaction.reply({ content: ui.buildAttendanceText(rows), ephemeral: true });
+        return;
+      }
+
+      if (name === "character-link") {
+        const id = await db.linkCharacter({
+          guildId: interaction.guildId,
+          userId: interaction.user.id,
+          name: interaction.options.getString("name", true),
+          realm: interaction.options.getString("realm", true),
+          region: interaction.options.getString("region", true),
+          className: interaction.options.getString("class") || null,
+          isMain: interaction.options.getBoolean("main") || false
+        });
+
+        await interaction.reply({ content: `Character linked. ID: \`${id}\``, ephemeral: true });
+        return;
+      }
+
+      if (name === "character-list") {
+        const chars = await db.listCharacters(interaction.guildId, interaction.user.id);
+        await interaction.reply({ content: ui.buildCharacterListText(chars), ephemeral: true });
+        return;
+      }
+
       if (name === "officer-role-set") {
         if (!isAdmin(interaction)) {
           return interaction.reply({
@@ -278,8 +430,24 @@ client.on(Events.InteractionCreate, async interaction => {
         const role = interaction.options.getRole("role", true);
         await db.setOfficerRole(interaction.guildId, role.id);
 
+        await interaction.reply({ content: `Officer role set to ${role}.`, ephemeral: true });
+        return;
+      }
+
+      if (name === "raid-export") {
+        if (!(await requireOfficer(interaction))) return;
+
+        const id = interaction.options.getString("id", true);
+        const exportData = await db.getRaidExportData(id);
+        const text = ui.buildRaidExportText(exportData);
+
+        const file = new AttachmentBuilder(Buffer.from(text, "utf8"), {
+          name: `raid-export-${id}.txt`
+        });
+
         await interaction.reply({
-          content: `Officer role set to ${role}.`,
+          content: "Raid export:",
+          files: [file],
           ephemeral: true
         });
         return;
@@ -297,9 +465,9 @@ client.on(Events.InteractionCreate, async interaction => {
         return interaction.reply({ content: "This raid is closed.", ephemeral: true });
       }
 
-      if (action === "change") {
+      if (action === "join" || action === "change") {
         await interaction.reply({
-          content: "Select your class:",
+          content: action === "join" ? "Select your class:" : "Change your class/spec:",
           components: ui.classMenu(raidId),
           ephemeral: true
         });
@@ -318,15 +486,17 @@ client.on(Events.InteractionCreate, async interaction => {
       if (action === "withdraw") {
         updatedRaid = await db.removeSignup(raidId, interaction.user.id);
       } else {
+        const existing = raid.signups.find(s => s.userId === interaction.user.id);
+
         updatedRaid = await db.upsertSignup({
           raidId,
           userId: interaction.user.id,
           username: interaction.member?.displayName || interaction.user.username,
           status: statusMap[action],
-          className: null,
-          role: null,
-          spec: null,
-          note: null
+          className: existing?.className || null,
+          role: existing?.role || null,
+          spec: existing?.spec || null,
+          note: existing?.note || null
         });
       }
 
