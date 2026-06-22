@@ -308,6 +308,108 @@ client.on(Events.InteractionCreate, async interaction => {
         return;
       }
 
+      if (name === "raid-recurring-create") {
+        if (!(await requireOfficer(interaction))) return;
+
+        const id = await db.createRecurringRaid({
+          guildId: interaction.guildId,
+          channelId: interaction.channelId,
+          templateName: interaction.options.getString("template", true),
+          dayOfWeek: interaction.options.getString("day", true).toLowerCase(),
+          timeOfDay: interaction.options.getString("time", true),
+          createdBy: interaction.user.id
+        });
+
+        await interaction.reply({
+          content: `Recurring raid created. ID: \`${id}\``,
+          ephemeral: true
+        });
+        return;
+      }
+
+      if (name === "raid-recurring-list") {
+        const rows = await db.listRecurringRaids(interaction.guildId);
+
+        await interaction.reply({
+          content: ui.buildRecurringListText(rows),
+          ephemeral: true
+        });
+        return;
+      }
+
+      if (name === "raid-recurring-delete") {
+        if (!(await requireOfficer(interaction))) return;
+
+        const id = interaction.options.getString("id", true);
+        await db.deleteRecurringRaid(id);
+
+        await interaction.reply({
+          content: "Recurring raid deleted.",
+          ephemeral: true
+        });
+        return;
+      }
+
+      if (name === "roster-move") {
+        if (!(await requireOfficer(interaction))) return;
+
+        const raidId = interaction.options.getString("raid_id", true);
+        const user = interaction.options.getUser("user", true);
+        const status = interaction.options.getString("status", true);
+        const role = interaction.options.getString("role") || null;
+        const spec = interaction.options.getString("spec") || null;
+
+        const raid = await db.getRaid(raidId);
+        if (!raid) return interaction.reply({ content: "Raid not found.", ephemeral: true });
+
+        const updatedRaid = await db.upsertSignup({
+          raidId,
+          userId: user.id,
+          username: user.username,
+          status,
+          role,
+          spec,
+          note: null
+        });
+
+        await refreshRaidMessage(updatedRaid);
+        await interaction.reply({
+          content: `Moved ${user} to **${status}**.`,
+          ephemeral: true
+        });
+        return;
+      }
+
+      if (name === "roster-note") {
+        if (!(await requireOfficer(interaction))) return;
+
+        const raidId = interaction.options.getString("raid_id", true);
+        const user = interaction.options.getUser("user", true);
+        const note = interaction.options.getString("note", true);
+
+        const raid = await db.getRaid(raidId);
+        if (!raid) return interaction.reply({ content: "Raid not found.", ephemeral: true });
+
+        const existing = raid.signups.find(s => s.userId === user.id);
+
+        const updatedRaid = await db.upsertSignup({
+          raidId,
+          userId: user.id,
+          username: existing?.username || user.username,
+          status: existing?.status || "Maybe",
+          role: existing?.role || null,
+          spec: existing?.spec || null,
+          note
+        });
+
+        await refreshRaidMessage(updatedRaid);
+        await interaction.reply({
+          content: `Added note for ${user}.`,
+          ephemeral: true
+        });
+        return;
+      }
+
       if (name === "attendance-mark") {
         if (!(await requireOfficer(interaction))) return;
 
@@ -418,9 +520,9 @@ client.on(Events.InteractionCreate, async interaction => {
         return interaction.reply({ content: "This raid is closed.", ephemeral: true });
       }
 
-      if (action === "join") {
+      if (action === "join" || action === "change") {
         await interaction.reply({
-          content: "Choose your role:",
+          content: action === "join" ? "Choose your role:" : "Change your role/spec:",
           components: ui.roleMenu(raidId),
           ephemeral: true
         });
@@ -484,14 +586,16 @@ client.on(Events.InteractionCreate, async interaction => {
           return interaction.update({ content: "This raid is closed or missing.", components: [] });
         }
 
+        const existing = raid.signups.find(s => s.userId === interaction.user.id);
+
         const updatedRaid = await db.upsertSignup({
           raidId,
           userId: interaction.user.id,
           username: interaction.member?.displayName || interaction.user.username,
-          status: "Going",
+          status: existing?.status && existing.status !== "Absent" ? existing.status : "Going",
           role,
           spec,
-          note: null
+          note: existing?.note || null
         });
 
         await refreshRaidMessage(updatedRaid);
