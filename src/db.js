@@ -179,13 +179,9 @@ async function getRaid(raidId) {
 
 async function listRaids(guildId) {
   const res = await pool.query(
-    `
-    SELECT id, title, raid_time, status, created_at
-    FROM raids
-    WHERE guild_id=$1
-    ORDER BY created_at DESC
-    LIMIT 20
-    `,
+    `SELECT id, title, raid_time, status, created_at
+     FROM raids WHERE guild_id=$1
+     ORDER BY created_at DESC LIMIT 20`,
     [guildId]
   );
   return res.rows;
@@ -196,11 +192,7 @@ async function updateRaid(raidId, fields) {
   if (!current) return null;
 
   await pool.query(
-    `
-    UPDATE raids
-    SET title=$1, raid_time=$2, note=$3
-    WHERE id=$4
-    `,
+    `UPDATE raids SET title=$1, raid_time=$2, note=$3 WHERE id=$4`,
     [
       fields.title || current.title,
       fields.time || current.time,
@@ -248,6 +240,144 @@ async function removeSignup(raidId, userId) {
   return getRaid(raidId);
 }
 
+async function addReminder(raidId, minutesBefore) {
+  const id = Date.now().toString();
+  await pool.query(
+    `INSERT INTO reminders (id, raid_id, minutes_before, sent) VALUES ($1,$2,$3,false)`,
+    [id, raidId, minutesBefore]
+  );
+  return id;
+}
+
+async function listReminders(raidId) {
+  const res = await pool.query(
+    `SELECT * FROM reminders WHERE raid_id=$1 ORDER BY minutes_before DESC`,
+    [raidId]
+  );
+  return res.rows;
+}
+
+async function clearReminders(raidId) {
+  await pool.query(`DELETE FROM reminders WHERE raid_id=$1`, [raidId]);
+}
+
+async function getPendingReminders() {
+  const res = await pool.query(`
+    SELECT reminders.*, raids.guild_id, raids.channel_id, raids.message_id, raids.title, raids.raid_time, raids.status
+    FROM reminders
+    JOIN raids ON reminders.raid_id = raids.id
+    WHERE reminders.sent=false AND raids.status='OPEN'
+  `);
+  return res.rows;
+}
+
+async function markReminderSent(reminderId) {
+  await pool.query(`UPDATE reminders SET sent=true WHERE id=$1`, [reminderId]);
+}
+
+async function createTemplate(template) {
+  const id = Date.now().toString();
+  await pool.query(
+    `INSERT INTO raid_templates (id, guild_id, name, title, note, created_by)
+     VALUES ($1,$2,$3,$4,$5,$6)`,
+    [id, template.guildId, template.name, template.title, template.note, template.createdBy]
+  );
+  return id;
+}
+
+async function getTemplate(guildId, name) {
+  const res = await pool.query(
+    `SELECT * FROM raid_templates WHERE guild_id=$1 AND LOWER(name)=LOWER($2) LIMIT 1`,
+    [guildId, name]
+  );
+  return res.rows[0] || null;
+}
+
+async function listTemplates(guildId) {
+  const res = await pool.query(
+    `SELECT * FROM raid_templates WHERE guild_id=$1 ORDER BY created_at DESC LIMIT 20`,
+    [guildId]
+  );
+  return res.rows;
+}
+
+async function createRecurringRaid(row) {
+  const id = Date.now().toString();
+  await pool.query(
+    `INSERT INTO recurring_raids
+     (id, guild_id, channel_id, template_name, day_of_week, time_of_day, created_by, active)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,true)`,
+    [id, row.guildId, row.channelId, row.templateName, row.dayOfWeek, row.timeOfDay, row.createdBy]
+  );
+  return id;
+}
+
+async function listRecurringRaids(guildId) {
+  const res = await pool.query(
+    `SELECT * FROM recurring_raids WHERE guild_id=$1 AND active=true ORDER BY created_at DESC`,
+    [guildId]
+  );
+  return res.rows;
+}
+
+async function deleteRecurringRaid(id) {
+  await pool.query(`UPDATE recurring_raids SET active=false WHERE id=$1`, [id]);
+}
+
+async function getActiveRecurringRaids() {
+  const res = await pool.query(`SELECT * FROM recurring_raids WHERE active=true`);
+  return res.rows;
+}
+
+async function markRecurringCreated(id, key) {
+  await pool.query(`UPDATE recurring_raids SET last_created_key=$1 WHERE id=$2`, [key, id]);
+}
+
+async function markAttendance({ raidId, userId, username, attended, markedBy }) {
+  await pool.query(
+    `
+    INSERT INTO attendance (raid_id, user_id, username, attended, marked_by, marked_at)
+    VALUES ($1,$2,$3,$4,$5,NOW())
+    ON CONFLICT (raid_id, user_id)
+    DO UPDATE SET username=$3, attended=$4, marked_by=$5, marked_at=NOW()
+    `,
+    [raidId, userId, username, attended, markedBy]
+  );
+}
+
+async function getAttendance(raidId) {
+  const res = await pool.query(
+    `SELECT * FROM attendance WHERE raid_id=$1 ORDER BY username ASC`,
+    [raidId]
+  );
+  return res.rows;
+}
+
+async function linkCharacter(character) {
+  const id = Date.now().toString();
+  await pool.query(
+    `INSERT INTO characters (id, guild_id, user_id, region, realm, name, class_name, is_main)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8)`,
+    [id, character.guildId, character.userId, character.region, character.realm, character.name, character.className, character.isMain]
+  );
+  return id;
+}
+
+async function listCharacters(guildId, userId) {
+  const res = await pool.query(
+    `SELECT * FROM characters WHERE guild_id=$1 AND user_id=$2 ORDER BY is_main DESC, created_at DESC`,
+    [guildId, userId]
+  );
+  return res.rows;
+}
+
+async function getRaidExportData(raidId) {
+  return {
+    raid: await getRaid(raidId),
+    attendance: await getAttendance(raidId)
+  };
+}
+
 module.exports = {
   initDb,
   setOfficerRole,
@@ -260,5 +390,23 @@ module.exports = {
   deleteRaid,
   setRaidStatus,
   upsertSignup,
-  removeSignup
+  removeSignup,
+  addReminder,
+  listReminders,
+  clearReminders,
+  getPendingReminders,
+  markReminderSent,
+  createTemplate,
+  getTemplate,
+  listTemplates,
+  createRecurringRaid,
+  listRecurringRaids,
+  deleteRecurringRaid,
+  getActiveRecurringRaids,
+  markRecurringCreated,
+  markAttendance,
+  getAttendance,
+  linkCharacter,
+  listCharacters,
+  getRaidExportData
 };
