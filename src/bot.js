@@ -7,7 +7,6 @@ const {
 const {
   createRaid,
   setRaidMessageId,
-  getRaid,
   upsertSignup,
   removeSignup
 } = require("./store");
@@ -19,21 +18,25 @@ const {
   buildSpecSelect
 } = require("./ui");
 
+// TEMP RAILWAY DEBUG
+console.log("Railway env check:");
+console.log("Has DISCORD_TOKEN?", Boolean(process.env.DISCORD_TOKEN));
+console.log(
+  "Discord env keys found:",
+  Object.keys(process.env).filter((key) => key.includes("DISCORD"))
+);
+
 const token = process.env.DISCORD_TOKEN;
 
 if (!token) {
   console.error("Missing DISCORD_TOKEN");
+  console.error("Make sure DISCORD_TOKEN is added to the same Railway service that runs this bot.");
   process.exit(1);
 }
 
 const client = new Client({
-  intents: [
-    GatewayIntentBits.Guilds
-  ]
+  intents: [GatewayIntentBits.Guilds]
 });
-
-// temporarily store role selection before spec selection
-const pendingSelections = new Map();
 
 client.once(Events.ClientReady, (c) => {
   console.log(`Logged in as ${c.user.tag}`);
@@ -41,7 +44,6 @@ client.once(Events.ClientReady, (c) => {
 
 client.on(Events.InteractionCreate, async (interaction) => {
   try {
-    // slash command: /raid-create
     if (interaction.isChatInputCommand()) {
       if (interaction.commandName === "raid-create") {
         const title = interaction.options.getString("title", true);
@@ -68,7 +70,6 @@ client.on(Events.InteractionCreate, async (interaction) => {
       }
     }
 
-    // buttons
     if (interaction.isButton()) {
       const [type, action, raidId] = interaction.customId.split(":");
 
@@ -83,52 +84,18 @@ client.on(Events.InteractionCreate, async (interaction) => {
         return;
       }
 
-      if (action === "late") {
+      const statusMap = {
+        late: "LATE",
+        maybe: "MAYBE",
+        absent: "ABSENT"
+      };
+
+      if (statusMap[action]) {
         const raid = upsertSignup({
           raidId,
           userId: interaction.user.id,
           username: interaction.user.displayName || interaction.user.username,
-          status: "LATE"
-        });
-
-        if (!raid) {
-          await interaction.reply({ content: "Raid not found.", ephemeral: true });
-          return;
-        }
-
-        await interaction.update({
-          embeds: [buildRaidEmbed(raid)],
-          components: buildSignupButtons(raidId)
-        });
-        return;
-      }
-
-      if (action === "maybe") {
-        const raid = upsertSignup({
-          raidId,
-          userId: interaction.user.id,
-          username: interaction.user.displayName || interaction.user.username,
-          status: "MAYBE"
-        });
-
-        if (!raid) {
-          await interaction.reply({ content: "Raid not found.", ephemeral: true });
-          return;
-        }
-
-        await interaction.update({
-          embeds: [buildRaidEmbed(raid)],
-          components: buildSignupButtons(raidId)
-        });
-        return;
-      }
-
-      if (action === "absent") {
-        const raid = upsertSignup({
-          raidId,
-          userId: interaction.user.id,
-          username: interaction.user.displayName || interaction.user.username,
-          status: "ABSENT"
+          status: statusMap[action]
         });
 
         if (!raid) {
@@ -162,13 +129,10 @@ client.on(Events.InteractionCreate, async (interaction) => {
       }
     }
 
-    // select menu: role
     if (interaction.isStringSelectMenu()) {
       if (interaction.customId.startsWith("role:")) {
         const [, raidId] = interaction.customId.split(":");
         const role = interaction.values[0];
-
-        pendingSelections.set(`${raidId}:${interaction.user.id}`, { role });
 
         await interaction.update({
           content: `Role selected: **${role}**. Now choose your spec:`,
@@ -191,14 +155,11 @@ client.on(Events.InteractionCreate, async (interaction) => {
           spec
         });
 
-        pendingSelections.delete(`${raidId}:${interaction.user.id}`);
-
         if (!raid) {
           await interaction.reply({ content: "Raid not found.", ephemeral: true });
           return;
         }
 
-        // update the original raid message in the channel
         const channel = interaction.channel;
         const message = await channel.messages.fetch(raid.messageId);
 
