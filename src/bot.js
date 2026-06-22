@@ -16,6 +16,7 @@ const {
   initDb,
   createRaid,
   setRaidMessageId,
+  updateRaid,
   deleteRaid,
   setRaidStatus,
   listRaids,
@@ -28,12 +29,6 @@ const TOKEN = process.env.DISCORD_TOKEN;
 const CLIENT_ID = process.env.DISCORD_CLIENT_ID;
 const GUILD_ID = process.env.DISCORD_GUILD_ID;
 const DATABASE_URL = process.env.DATABASE_URL;
-
-console.log("Env check:");
-console.log("DISCORD_TOKEN:", !!TOKEN);
-console.log("DISCORD_CLIENT_ID:", !!CLIENT_ID);
-console.log("DISCORD_GUILD_ID:", !!GUILD_ID);
-console.log("DATABASE_URL:", !!DATABASE_URL);
 
 if (!TOKEN || !CLIENT_ID || !GUILD_ID || !DATABASE_URL) {
   console.error("Missing Railway variables.");
@@ -80,7 +75,27 @@ const commands = [
   new SlashCommandBuilder()
     .setName("raid-delete")
     .setDescription("Delete a raid")
+    .addStringOption(o => o.setName("id").setDescription("Raid ID").setRequired(true)),
+
+  new SlashCommandBuilder()
+    .setName("raid-edit")
+    .setDescription("Edit raid title, time, or note")
     .addStringOption(o => o.setName("id").setDescription("Raid ID").setRequired(true))
+    .addStringOption(o => o.setName("title").setDescription("New title").setRequired(false))
+    .addStringOption(o => o.setName("time").setDescription("New time").setRequired(false))
+    .addStringOption(o => o.setName("note").setDescription("New note").setRequired(false)),
+
+  new SlashCommandBuilder()
+    .setName("raid-note")
+    .setDescription("Update only the raid note")
+    .addStringOption(o => o.setName("id").setDescription("Raid ID").setRequired(true))
+    .addStringOption(o => o.setName("note").setDescription("New note").setRequired(true)),
+
+  new SlashCommandBuilder()
+    .setName("raid-ping")
+    .setDescription("Ping everyone signed up to a raid")
+    .addStringOption(o => o.setName("id").setDescription("Raid ID").setRequired(true))
+    .addStringOption(o => o.setName("message").setDescription("Optional ping message").setRequired(false))
 ].map(c => c.toJSON());
 
 function buttons(raidId, closed = false) {
@@ -285,6 +300,80 @@ client.on(Events.InteractionCreate, async interaction => {
 
         await deleteRaid(id);
         await interaction.reply({ content: `Deleted raid: **${raid.title}**`, ephemeral: true });
+        return;
+      }
+
+      if (interaction.commandName === "raid-edit") {
+        const id = interaction.options.getString("id", true);
+        const title = interaction.options.getString("title");
+        const time = interaction.options.getString("time");
+        const note = interaction.options.getString("note");
+
+        if (!title && !time && note === null) {
+          await interaction.reply({
+            content: "Give me at least one thing to edit: title, time, or note.",
+            ephemeral: true
+          });
+          return;
+        }
+
+        const raid = await updateRaid(id, {
+          title,
+          time,
+          note: note === null ? undefined : note
+        });
+
+        if (!raid) {
+          await interaction.reply({ content: "Raid not found.", ephemeral: true });
+          return;
+        }
+
+        await refreshRaidMessage(client, raid);
+        await interaction.reply({ content: `Updated raid: **${raid.title}**`, ephemeral: true });
+        return;
+      }
+
+      if (interaction.commandName === "raid-note") {
+        const id = interaction.options.getString("id", true);
+        const note = interaction.options.getString("note", true);
+
+        const raid = await updateRaid(id, { note });
+
+        if (!raid) {
+          await interaction.reply({ content: "Raid not found.", ephemeral: true });
+          return;
+        }
+
+        await refreshRaidMessage(client, raid);
+        await interaction.reply({ content: `Updated note for **${raid.title}**`, ephemeral: true });
+        return;
+      }
+
+      if (interaction.commandName === "raid-ping") {
+        const id = interaction.options.getString("id", true);
+        const message = interaction.options.getString("message") || "Raid reminder.";
+
+        const raid = await getRaid(id);
+
+        if (!raid) {
+          await interaction.reply({ content: "Raid not found.", ephemeral: true });
+          return;
+        }
+
+        const signed = raid.signups.filter(s => s.status !== "Absent");
+
+        if (!signed.length) {
+          await interaction.reply({ content: "Nobody is signed up to ping.", ephemeral: true });
+          return;
+        }
+
+        const mentions = signed.map(s => `<@${s.userId}>`).join(" ");
+
+        await interaction.reply({
+          content: `**${raid.title}**\n${message}\n\n${mentions}`,
+          allowedMentions: { users: signed.map(s => s.userId) }
+        });
+
         return;
       }
     }
