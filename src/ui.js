@@ -18,9 +18,15 @@ function raidButtons(raidId, closed = false) {
         .setDisabled(closed),
 
       new ButtonBuilder()
+        .setCustomId(`raid:change:${raidId}`)
+        .setLabel("Change Role/Spec")
+        .setStyle(ButtonStyle.Primary)
+        .setDisabled(closed),
+
+      new ButtonBuilder()
         .setCustomId(`raid:late:${raidId}`)
         .setLabel("Late")
-        .setStyle(ButtonStyle.Primary)
+        .setStyle(ButtonStyle.Secondary)
         .setDisabled(closed),
 
       new ButtonBuilder()
@@ -30,15 +36,17 @@ function raidButtons(raidId, closed = false) {
         .setDisabled(closed),
 
       new ButtonBuilder()
-        .setCustomId(`raid:absent:${raidId}`)
-        .setLabel("Absent")
-        .setStyle(ButtonStyle.Danger)
-        .setDisabled(closed),
-
-      new ButtonBuilder()
         .setCustomId(`raid:withdraw:${raidId}`)
         .setLabel("Withdraw")
+        .setStyle(ButtonStyle.Danger)
+    ),
+
+    new ActionRowBuilder().addComponents(
+      new ButtonBuilder()
+        .setCustomId(`raid:absent:${raidId}`)
+        .setLabel("Absent")
         .setStyle(ButtonStyle.Secondary)
+        .setDisabled(closed)
     )
   ];
 }
@@ -80,6 +88,7 @@ function groupSignups(signups = []) {
     going: byStatus("Going"),
     late: byStatus("Late"),
     maybe: byStatus("Maybe"),
+    bench: byStatus("Bench"),
     absent: byStatus("Absent")
   };
 }
@@ -115,7 +124,7 @@ function renderFlatList(items) {
 
 function buildRaidEmbed(raid) {
   const signups = raid.signups || [];
-  const { going, late, maybe, absent } = groupSignups(signups);
+  const { going, late, maybe, bench, absent } = groupSignups(signups);
 
   return new EmbedBuilder()
     .setTitle(`Raid: ${raid.title}`)
@@ -137,6 +146,10 @@ function buildRaidEmbed(raid) {
       {
         name: `Maybe (${maybe.length})`,
         value: renderFlatList(maybe)
+      },
+      {
+        name: `Bench (${bench.length})`,
+        value: renderFlatList(bench)
       },
       {
         name: `Absent (${absent.length})`,
@@ -167,6 +180,14 @@ function buildTemplateListText(templates) {
 
   return templates.map(t =>
     `**${t.name}** → ${t.title}${t.note ? `\nNote: ${t.note}` : ""}`
+  ).join("\n\n");
+}
+
+function buildRecurringListText(rows) {
+  if (!rows.length) return "No recurring raids found.";
+
+  return rows.map(r =>
+    `**${r.template_name}** — ${r.day_of_week} ${r.time_of_day}\nID: \`${r.id}\``
   ).join("\n\n");
 }
 
@@ -227,6 +248,7 @@ module.exports = {
   buildAttendanceText,
   buildRaidListText,
   buildTemplateListText,
+  buildRecurringListText,
   buildCharacterListText,
   buildReminderListText,
   buildRaidExportText
