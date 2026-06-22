@@ -16,6 +16,10 @@ const {
   initDb,
   createRaid,
   setRaidMessageId,
+  deleteRaid,
+  setRaidStatus,
+  listRaids,
+  getRaid,
   upsertSignup,
   removeSignup
 } = require("./db");
@@ -26,21 +30,13 @@ const GUILD_ID = process.env.DISCORD_GUILD_ID;
 const DATABASE_URL = process.env.DATABASE_URL;
 
 console.log("Env check:");
-console.log("NODE_ENV:", process.env.NODE_ENV);
 console.log("DISCORD_TOKEN:", !!TOKEN);
 console.log("DISCORD_CLIENT_ID:", !!CLIENT_ID);
 console.log("DISCORD_GUILD_ID:", !!GUILD_ID);
 console.log("DATABASE_URL:", !!DATABASE_URL);
-console.log(
-  "Discord/db keys present:",
-  Object.keys(process.env).filter(k =>
-    ["DISCORD", "DATABASE", "PG", "NODE_ENV"].some(prefix => k.startsWith(prefix))
-  )
-);
 
 if (!TOKEN || !CLIENT_ID || !GUILD_ID || !DATABASE_URL) {
   console.error("Missing Railway variables.");
-  console.error("Need DISCORD_TOKEN, DISCORD_CLIENT_ID, DISCORD_GUILD_ID, DATABASE_URL");
   process.exit(1);
 }
 
@@ -58,50 +54,43 @@ const commands = [
   new SlashCommandBuilder()
     .setName("raid-create")
     .setDescription("Create a raid signup")
-    .addStringOption(o =>
-      o.setName("title")
-        .setDescription("Raid title")
-        .setRequired(true)
-    )
-    .addStringOption(o =>
-      o.setName("time")
-        .setDescription("Raid time, example: Friday 20:00")
-        .setRequired(true)
-    )
-    .addStringOption(o =>
-      o.setName("note")
-        .setDescription("Optional note")
-        .setRequired(false)
-    )
+    .addStringOption(o => o.setName("title").setDescription("Raid title").setRequired(true))
+    .addStringOption(o => o.setName("time").setDescription("Raid time").setRequired(true))
+    .addStringOption(o => o.setName("note").setDescription("Optional note").setRequired(false)),
+
+  new SlashCommandBuilder()
+    .setName("raid-list")
+    .setDescription("Show recent raids"),
+
+  new SlashCommandBuilder()
+    .setName("raid-roster")
+    .setDescription("Show a raid roster")
+    .addStringOption(o => o.setName("id").setDescription("Raid ID").setRequired(true)),
+
+  new SlashCommandBuilder()
+    .setName("raid-close")
+    .setDescription("Close raid signups")
+    .addStringOption(o => o.setName("id").setDescription("Raid ID").setRequired(true)),
+
+  new SlashCommandBuilder()
+    .setName("raid-open")
+    .setDescription("Open raid signups")
+    .addStringOption(o => o.setName("id").setDescription("Raid ID").setRequired(true)),
+
+  new SlashCommandBuilder()
+    .setName("raid-delete")
+    .setDescription("Delete a raid")
+    .addStringOption(o => o.setName("id").setDescription("Raid ID").setRequired(true))
 ].map(c => c.toJSON());
 
-function buttons(raidId) {
+function buttons(raidId, closed = false) {
   return [
     new ActionRowBuilder().addComponents(
-      new ButtonBuilder()
-        .setCustomId(`raid:join:${raidId}`)
-        .setLabel("Join")
-        .setStyle(ButtonStyle.Success),
-
-      new ButtonBuilder()
-        .setCustomId(`raid:late:${raidId}`)
-        .setLabel("Late")
-        .setStyle(ButtonStyle.Primary),
-
-      new ButtonBuilder()
-        .setCustomId(`raid:maybe:${raidId}`)
-        .setLabel("Maybe")
-        .setStyle(ButtonStyle.Secondary),
-
-      new ButtonBuilder()
-        .setCustomId(`raid:absent:${raidId}`)
-        .setLabel("Absent")
-        .setStyle(ButtonStyle.Danger),
-
-      new ButtonBuilder()
-        .setCustomId(`raid:withdraw:${raidId}`)
-        .setLabel("Withdraw")
-        .setStyle(ButtonStyle.Secondary)
+      new ButtonBuilder().setCustomId(`raid:join:${raidId}`).setLabel("Join").setStyle(ButtonStyle.Success).setDisabled(closed),
+      new ButtonBuilder().setCustomId(`raid:late:${raidId}`).setLabel("Late").setStyle(ButtonStyle.Primary).setDisabled(closed),
+      new ButtonBuilder().setCustomId(`raid:maybe:${raidId}`).setLabel("Maybe").setStyle(ButtonStyle.Secondary).setDisabled(closed),
+      new ButtonBuilder().setCustomId(`raid:absent:${raidId}`).setLabel("Absent").setStyle(ButtonStyle.Danger).setDisabled(closed),
+      new ButtonBuilder().setCustomId(`raid:withdraw:${raidId}`).setLabel("Withdraw").setStyle(ButtonStyle.Secondary)
     )
   ];
 }
@@ -128,9 +117,8 @@ function specMenu(raidId, role) {
   ];
 }
 
-function embed(raid) {
+function raidEmbed(raid) {
   const signups = raid.signups || [];
-
   const byStatus = status => signups.filter(s => s.status === status);
 
   const going = byStatus("Going");
@@ -155,6 +143,7 @@ function embed(raid) {
     .setTitle(`Raid: ${raid.title}`)
     .setDescription(
       `**Time:** ${raid.time}\n` +
+      `**Status:** ${raid.status}\n` +
       `**Note:** ${raid.note || "None"}\n\n` +
       `No signup limits.`
     )
@@ -167,60 +156,153 @@ function embed(raid) {
     .setFooter({ text: `Raid ID: ${raid.id}` });
 }
 
+async function refreshRaidMessage(client, raid) {
+  if (!raid || !raid.messageId) return;
+
+  const channel = await client.channels.fetch(raid.channelId);
+  const message = await channel.messages.fetch(raid.messageId);
+
+  await message.edit({
+    embeds: [raidEmbed(raid)],
+    components: buttons(raid.id, raid.status === "CLOSED")
+  });
+}
+
 async function registerCommands() {
   const rest = new REST({ version: "10" }).setToken(TOKEN);
-
-  await rest.put(
-    Routes.applicationGuildCommands(CLIENT_ID, GUILD_ID),
-    { body: commands }
-  );
-
+  await rest.put(Routes.applicationGuildCommands(CLIENT_ID, GUILD_ID), { body: commands });
   console.log("Slash commands registered.");
 }
 
-const client = new Client({
-  intents: [GatewayIntentBits.Guilds]
-});
+const client = new Client({ intents: [GatewayIntentBits.Guilds] });
 
 client.once(Events.ClientReady, async c => {
   console.log(`Logged in as ${c.user.tag}`);
-
   await initDb();
   console.log("Database ready.");
-
   await registerCommands();
 });
 
 client.on(Events.InteractionCreate, async interaction => {
   try {
-    if (interaction.isChatInputCommand() && interaction.commandName === "raid-create") {
-      const raid = {
-        id: Date.now().toString(),
-        guildId: interaction.guildId,
-        channelId: interaction.channelId,
-        title: interaction.options.getString("title", true),
-        time: interaction.options.getString("time", true),
-        note: interaction.options.getString("note") || "",
-        createdBy: interaction.user.id,
-        signups: []
-      };
+    if (interaction.isChatInputCommand()) {
+      if (interaction.commandName === "raid-create") {
+        const raid = {
+          id: Date.now().toString(),
+          guildId: interaction.guildId,
+          channelId: interaction.channelId,
+          title: interaction.options.getString("title", true),
+          time: interaction.options.getString("time", true),
+          note: interaction.options.getString("note") || "",
+          createdBy: interaction.user.id,
+          status: "OPEN",
+          signups: []
+        };
 
-      await createRaid(raid);
+        await createRaid(raid);
 
-      const msg = await interaction.reply({
-        embeds: [embed(raid)],
-        components: buttons(raid.id),
-        fetchReply: true
-      });
+        const msg = await interaction.reply({
+          embeds: [raidEmbed(raid)],
+          components: buttons(raid.id),
+          fetchReply: true
+        });
 
-      await setRaidMessageId(raid.id, msg.id);
-      return;
+        await setRaidMessageId(raid.id, msg.id);
+        return;
+      }
+
+      if (interaction.commandName === "raid-list") {
+        const raids = await listRaids(interaction.guildId);
+
+        if (!raids.length) {
+          await interaction.reply({ content: "No raids found.", ephemeral: true });
+          return;
+        }
+
+        const text = raids.map(r =>
+          `**${r.title}** — ${r.raid_time}\nStatus: ${r.status} | ID: \`${r.id}\``
+        ).join("\n\n");
+
+        await interaction.reply({ content: text, ephemeral: true });
+        return;
+      }
+
+      if (interaction.commandName === "raid-roster") {
+        const id = interaction.options.getString("id", true);
+        const raid = await getRaid(id);
+
+        if (!raid) {
+          await interaction.reply({ content: "Raid not found.", ephemeral: true });
+          return;
+        }
+
+        await interaction.reply({ embeds: [raidEmbed(raid)], ephemeral: true });
+        return;
+      }
+
+      if (interaction.commandName === "raid-close") {
+        const id = interaction.options.getString("id", true);
+        const raid = await setRaidStatus(id, "CLOSED");
+
+        if (!raid) {
+          await interaction.reply({ content: "Raid not found.", ephemeral: true });
+          return;
+        }
+
+        await refreshRaidMessage(client, raid);
+        await interaction.reply({ content: `Closed raid: **${raid.title}**`, ephemeral: true });
+        return;
+      }
+
+      if (interaction.commandName === "raid-open") {
+        const id = interaction.options.getString("id", true);
+        const raid = await setRaidStatus(id, "OPEN");
+
+        if (!raid) {
+          await interaction.reply({ content: "Raid not found.", ephemeral: true });
+          return;
+        }
+
+        await refreshRaidMessage(client, raid);
+        await interaction.reply({ content: `Opened raid: **${raid.title}**`, ephemeral: true });
+        return;
+      }
+
+      if (interaction.commandName === "raid-delete") {
+        const id = interaction.options.getString("id", true);
+        const raid = await getRaid(id);
+
+        if (!raid) {
+          await interaction.reply({ content: "Raid not found.", ephemeral: true });
+          return;
+        }
+
+        try {
+          const channel = await client.channels.fetch(raid.channelId);
+          const message = await channel.messages.fetch(raid.messageId);
+          await message.delete();
+        } catch {}
+
+        await deleteRaid(id);
+        await interaction.reply({ content: `Deleted raid: **${raid.title}**`, ephemeral: true });
+        return;
+      }
     }
 
     if (interaction.isButton()) {
       const [type, action, raidId] = interaction.customId.split(":");
-
       if (type !== "raid") return;
+
+      const existingRaid = await getRaid(raidId);
+      if (!existingRaid) {
+        await interaction.reply({ content: "Raid not found.", ephemeral: true });
+        return;
+      }
+
+      if (existingRaid.status === "CLOSED" && action !== "withdraw") {
+        await interaction.reply({ content: "This raid is closed.", ephemeral: true });
+        return;
+      }
 
       if (action === "join") {
         await interaction.reply({
@@ -252,17 +334,9 @@ client.on(Events.InteractionCreate, async interaction => {
         });
       }
 
-      if (!raid) {
-        await interaction.reply({
-          content: "Raid not found.",
-          ephemeral: true
-        });
-        return;
-      }
-
       await interaction.update({
-        embeds: [embed(raid)],
-        components: buttons(raid.id)
+        embeds: [raidEmbed(raid)],
+        components: buttons(raid.id, raid.status === "CLOSED")
       });
 
       return;
@@ -271,6 +345,13 @@ client.on(Events.InteractionCreate, async interaction => {
     if (interaction.isStringSelectMenu()) {
       if (interaction.customId.startsWith("role:")) {
         const [, raidId] = interaction.customId.split(":");
+        const raid = await getRaid(raidId);
+
+        if (!raid || raid.status === "CLOSED") {
+          await interaction.update({ content: "This raid is closed or missing.", components: [] });
+          return;
+        }
+
         const role = interaction.values[0];
 
         await interaction.update({
@@ -285,6 +366,12 @@ client.on(Events.InteractionCreate, async interaction => {
         const [, raidId, role] = interaction.customId.split(":");
         const spec = interaction.values[0];
 
+        const oldRaid = await getRaid(raidId);
+        if (!oldRaid || oldRaid.status === "CLOSED") {
+          await interaction.update({ content: "This raid is closed or missing.", components: [] });
+          return;
+        }
+
         const raid = await upsertSignup({
           raidId,
           userId: interaction.user.id,
@@ -294,21 +381,7 @@ client.on(Events.InteractionCreate, async interaction => {
           spec
         });
 
-        if (!raid) {
-          await interaction.reply({
-            content: "Raid not found.",
-            ephemeral: true
-          });
-          return;
-        }
-
-        const channel = await client.channels.fetch(raid.channelId);
-        const message = await channel.messages.fetch(raid.messageId);
-
-        await message.edit({
-          embeds: [embed(raid)],
-          components: buttons(raid.id)
-        });
+        await refreshRaidMessage(client, raid);
 
         await interaction.update({
           content: `Signed up as **${spec}**.`,
@@ -323,10 +396,7 @@ client.on(Events.InteractionCreate, async interaction => {
     console.error(err);
 
     if (interaction.isRepliable() && !interaction.replied && !interaction.deferred) {
-      await interaction.reply({
-        content: "Something went wrong.",
-        ephemeral: true
-      });
+      await interaction.reply({ content: "Something went wrong.", ephemeral: true });
     }
   }
 });
