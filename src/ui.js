@@ -62,7 +62,7 @@ function classMenu(raidId) {
     new ActionRowBuilder().addComponents(
       new StringSelectMenuBuilder()
         .setCustomId(`class:${raidId}`)
-        .setPlaceholder("Select your class")
+        .setPlaceholder("Select your Horde TBC class")
         .addOptions(
           wowClasses.map(cls => ({
             label: cls,
@@ -103,31 +103,31 @@ function getCounts(signups = []) {
   };
 }
 
-function renderClassRoster(signups = []) {
-  const going = signups.filter(s => s.status === "Going");
-  if (!going.length) return "No signups yet.";
+function renderClassBlock(signups = [], className) {
+  const rows = signups.filter(s => s.status === "Going" && s.className === className);
 
-  const blocks = [];
+  if (!rows.length) return null;
 
-  for (const cls of wowClasses) {
-    const people = going.filter(s => s.className === cls);
-    if (!people.length) continue;
+  const lines = rows.map((p, index) => {
+    const number = index + 1;
+    let line = `\`${number.toString().padStart(2, "0")}\` ${p.username}`;
 
-    const lines = people.map(p => {
-      let line = `• ${p.username}`;
-      if (p.spec) line += ` — ${p.spec}`;
-      if (p.note) line += ` (${p.note})`;
-      return line;
-    });
+    if (p.spec) line += ` — ${p.spec}`;
+    if (p.note) line += ` (${p.note})`;
 
-    blocks.push(`**${classEmoji[cls]} ${cls} (${people.length})**\n${lines.join("\n")}`);
-  }
+    return line;
+  });
 
-  return blocks.join("\n\n") || "No class signups yet.";
+  return {
+    name: `${classEmoji[className]} ${className} (${rows.length})`,
+    value: lines.join("\n"),
+    inline: true
+  };
 }
 
 function renderStatus(signups = [], status) {
   const rows = signups.filter(s => s.status === status);
+
   if (!rows.length) return "Nobody";
 
   return rows.map(p => {
@@ -143,35 +143,58 @@ function buildRaidEmbed(raid) {
   const signups = raid.signups || [];
   const counts = getCounts(signups);
 
-  return new EmbedBuilder()
-    .setTitle(`Raid: ${raid.title}`)
+  const classFields = wowClasses
+    .map(cls => renderClassBlock(signups, cls))
+    .filter(Boolean);
+
+  const statusFields = [
+    {
+      name: `Bench (${signups.filter(s => s.status === "Bench").length})`,
+      value: renderStatus(signups, "Bench"),
+      inline: true
+    },
+    {
+      name: `Late (${signups.filter(s => s.status === "Late").length})`,
+      value: renderStatus(signups, "Late"),
+      inline: true
+    },
+    {
+      name: `Tentative (${signups.filter(s => s.status === "Maybe").length})`,
+      value: renderStatus(signups, "Maybe"),
+      inline: true
+    },
+    {
+      name: `Absence (${signups.filter(s => s.status === "Absent").length})`,
+      value: renderStatus(signups, "Absent"),
+      inline: true
+    }
+  ];
+
+  const embed = new EmbedBuilder()
+    .setTitle("R A I D")
     .setDescription(
-      `🗓️ **Time:** ${raid.time}\n` +
+      `**Raid**\n` +
+      `📌 **${raid.title}**        👥 **${counts.total}**\n` +
+      `🗓️ **${raid.time}**\n` +
       `📌 **Status:** ${raid.status}\n` +
       `📝 **Note:** ${raid.note || "None"}\n\n` +
-      `👥 **${counts.total} signed**\n` +
-      `🛡️ Tanks **${counts.tank}**  |  ✚ Healers **${counts.healer}**  |  ⚔️ Melee **${counts.melee}**  |  🏹 Ranged **${counts.ranged}**\n\n` +
-      `__**Roster**__\n${renderClassRoster(signups)}`
-    )
-    .addFields(
-      {
-        name: `Bench (${signups.filter(s => s.status === "Bench").length})`,
-        value: renderStatus(signups, "Bench")
-      },
-      {
-        name: `Late (${signups.filter(s => s.status === "Late").length})`,
-        value: renderStatus(signups, "Late")
-      },
-      {
-        name: `Tentative (${signups.filter(s => s.status === "Maybe").length})`,
-        value: renderStatus(signups, "Maybe")
-      },
-      {
-        name: `Absence (${signups.filter(s => s.status === "Absent").length})`,
-        value: renderStatus(signups, "Absent")
-      }
+      `🛡️ Tanks **${counts.tank}**   ⚔️ Melee **${counts.melee}**   🏹 Ranged **${counts.ranged}**   ✚ Healers **${counts.healer}**`
     )
     .setFooter({ text: `Raid ID: ${raid.id}` });
+
+  if (classFields.length) {
+    embed.addFields(classFields);
+  } else {
+    embed.addFields({
+      name: "Roster",
+      value: "No signups yet.",
+      inline: false
+    });
+  }
+
+  embed.addFields(statusFields);
+
+  return embed;
 }
 
 function buildRaidListText(raids) {
